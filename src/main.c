@@ -41,7 +41,6 @@ int main(void) {
     terminal_printf_line("\r\n***** Welcome to CANBusHacker *****");
     terminal_printf_line("CAN baudrate is %d Kbps", CAN_BAUDRATE_KBPS);
     can_init();
-    unsigned int start = timestamp_ms();
     while(1) {
         brute_loop();
         if (command_buf[0]) {
