@@ -10,10 +10,20 @@
 #include <stdio.h>
 #include <string.h>
 #include <ctype.h>
+#include <stdbool.h>
 
 #include <stm32f10x_can.h>
 
 #include "terminal.h"
+#include "sleep.h"
+
+typedef struct {
+    int id;
+    unsigned int timestamp;
+} PREVIOUS;
+
+#define PREVIOUS_COMMAND_BUFFER_SIZE 20
+PREVIOUS previous_buffer[PREVIOUS_COMMAND_BUFFER_SIZE] = {{0, 0}};
 
 void can_init(void) {
     NVIC_InitTypeDef NVIC_InitStructure;
@@ -98,7 +108,7 @@ void can_init(void) {
     CAN_ITConfig(CAN1, CAN_IT_FOV0, ENABLE);
 }
 
-void can_print(const char *text, int id, int dlc, unsigned char *data) {
+void can_print(const char *text, int id, int dlc, unsigned char *data, bool previous) {
     if (dlc > 8) {
         terminal_printf_line("Message data is more than 8 bytes, CAN is not allowed that");
         return;
@@ -107,8 +117,33 @@ void can_print(const char *text, int id, int dlc, unsigned char *data) {
     for (int i = 0; i < dlc; i++) {
         sprintf(&buf[i * 2], "%02X", data[i]);
     }
-    terminal_printf_line("%s: %X#%s [%d %s]", text, id, buf, dlc,
-            (dlc == 1) ? "byte" : "bytes");
+    unsigned int period = 0;
+    bool period_found = false;
+    if (previous) {
+        unsigned int now = timestamp_ms();
+        unsigned int max = previous_buffer[0].timestamp;
+        unsigned int max_index = 0;
+        for (int i = 0; i < PREVIOUS_COMMAND_BUFFER_SIZE; i++) {
+            unsigned int i_period = now - previous_buffer[i].timestamp;
+            if (previous_buffer[i].id == id) {
+                period = i_period;
+                previous_buffer[i].timestamp = now;
+                period_found = true;
+                break;
+            }
+            if (i_period > max) {
+                max = i_period;
+                max_index = i;
+            }
+        }
+        if (!period_found) {
+            previous_buffer[max_index].id = id;
+            previous_buffer[max_index].timestamp = now;
+            previous = false;
+        }
+    }
+    terminal_printf_line(previous ? "%s: %X#%s [%d %s, previous %u ms ago]" : "%s: %X#%s [%d %s]",
+            text, id, buf, dlc, (dlc == 1) ? "byte" : "bytes", period);
 }
 
 void can_send(const char *line) {
@@ -152,7 +187,7 @@ void can_send(const char *line) {
         sscanf(&buf[i * 2], "%2hhx", &message.Data[i]);
     }
     CAN_Transmit(CAN1, &message);
-    can_print("CAN send", message.StdId, message.DLC, message.Data);
+    can_print("CAN send", message.StdId, message.DLC, message.Data, false);
 }
 
 void USB_LP_CAN_RX0_IRQHandler(void) {
@@ -162,7 +197,7 @@ void USB_LP_CAN_RX0_IRQHandler(void) {
         CAN_Receive(CAN1, CAN_FIFO0, &message);
         if (message.IDE == CAN_Id_Standard) {
             // CAN data received
-            can_print("CAN received", message.StdId, message.DLC, message.Data);
+            can_print("CAN received", message.StdId, message.DLC, message.Data, true);
         }
     }
 
